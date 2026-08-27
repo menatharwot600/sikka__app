@@ -1,0 +1,41 @@
+// ============================================================
+// إضافات لملف android/app/build.gradle (بيتعمل بعد npx cap add android)
+// ============================================================
+//
+// 1) في أول السطور، قبل android { ... }، ضيف الكود ده عشان يقرا
+//    بيانات التوقيع من keystore.properties (ملف منفصل، مش بيتترفع
+//    على Git أبداً — فيه الباسورد بتاع الـ Keystore)
+//
+// def keystorePropertiesFile = rootProject.file("keystore.properties")
+// def keystoreProperties = new Properties()
+// if (keystorePropertiesFile.exists()) {
+//     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+// }
+
+// ------------------------------------------------------------
+// 2) جوه android { ... } ضيف signingConfigs ده (قبل buildTypes)
+// ------------------------------------------------------------
+//
+// signingConfigs {
+//     release {
+//         if (keystorePropertiesFile.exists()) {
+//             storeFile file(keystoreProperties['storeFile'])
+//             storePassword keystoreProperties['storePassword']
+//             keyAlias keystoreProperties['keyAlias']
+//             keyPassword keystoreProperties['keyPassword']
+//         }
+//     }
+// }
+//
+// buildTypes {
+//     release {
+//         signingConfig signingConfigs.release
+//         minifyEnabled false
+//     }
+// }
+
+// ------------------------------------------------------------
+// 3) ملف keystore.properties (في جذر مشروع android/، جنب build.gradle
+//    الرئيسي — مش جوه app/) — انسخ النموذج من keystore.properties.example
+//    المرفق واملأه ببياناتك الحقيقية. ضيفه لـ .gitignore فوراً.
+// ------------------------------------------------------------

@@ -1,0 +1,35 @@
+<!--
+  ملف مرجعي مش للنسخ الكامل — ده الأجزاء اللي محتاج تضيفها/تظبطها
+  في android/app/src/main/AndroidManifest.xml بعد ما تعمل npx cap add android
+-->
+
+<!-- 1) الصلاحيات — تتضاف جوه <manifest> فوق <application> -->
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+<!-- لو محتاج تدعم أندرويد أقدم من 13 (API 33) في رفع الصور: -->
+<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+    android:maxSdkVersion="32" />
+
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+
+<!--
+  2) Deep Link لرابط استرجاع كلمة السر (المرحلة 4)
+  يتضاف جوه <activity android:name=".MainActivity"> بعد الـ intent-filter الأساسي
+  استبدل YOUR-SUPABASE-PROJECT بدومين الـ redirect بتاعك الفعلي
+-->
+<intent-filter android:autoVerify="true">
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data
+        android:scheme="https"
+        android:host="YOUR-SUPABASE-PROJECT.supabase.co"
+        android:pathPrefix="/auth/v1/verify" />
+</intent-filter>
+
+<!--
+  3) targetSdkVersion لازم يبقى 36 (Android 16) — ده بيتظبط مش هنا،
+  في android/variables.gradle:
+     targetSdkVersion = 36
+     compileSdkVersion = 36
+-->

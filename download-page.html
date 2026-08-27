@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>حمّل تطبيق سكة</title>
+<style>
+  :root {
+    --navy: #0B1526;
+    --navy-2: #0F1D33;
+    --gold: #F2B705;
+    --gold-2: #FFD166;
+    --muted: #8A94A6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--navy);
+    color: #fff;
+    font-family: -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    background: var(--navy-2);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px;
+    padding: 40px 28px;
+    max-width: 420px;
+    width: 100%;
+    text-align: center;
+  }
+  .icon {
+    width: 96px; height: 96px;
+    border-radius: 24px;
+    margin: 0 auto 20px;
+    display: block;
+  }
+  h1 { font-size: 22px; margin-bottom: 8px; }
+  p.tagline { color: var(--muted); font-size: 14px; margin-bottom: 28px; }
+  .download-btn {
+    display: block;
+    background: linear-gradient(135deg, var(--gold), var(--gold-2));
+    color: #1a1200;
+    font-weight: 700;
+    font-size: 16px;
+    padding: 16px;
+    border-radius: 14px;
+    text-decoration: none;
+    margin-bottom: 14px;
+  }
+  .version { color: var(--muted); font-size: 12px; margin-bottom: 28px; }
+  .note {
+    background: rgba(242,183,5,0.08);
+    border: 1px solid rgba(242,183,5,0.25);
+    border-radius: 12px;
+    padding: 14px 16px;
+    font-size: 12.5px;
+    line-height: 1.8;
+    color: var(--muted);
+    text-align: right;
+  }
+  .note b { color: #fff; }
+  ol { margin-inline-start: 18px; margin-top: 6px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <img class="icon" src="seka-icon-192.png" alt="سكة" />
+    <h1>سكة</h1>
+    <p class="tagline">اطلب دليفري لأي حاجة من حد قريب منك</p>
+
+    <!-- غيّر الرابط ده لرابط التحميل الفعلي بتاع الـ APK -->
+    <a class="download-btn" href="./seka-release.apk" download>
+      ⬇ حمّل التطبيق
+    </a>
+    <div class="version">الإصدار 1.0.0 — Android</div>
+
+    <div class="note">
+      <b>قبل التثبيت:</b>
+      <ol>
+        <li>بعد التحميل، دوس على الملف عشان تفتحه</li>
+        <li>أندرويد هيوريك تحذير "تثبيت من مصدر غير معروف" — دوس <b>إعدادات</b> وفعّل السماح لهذا المصدر</li>
+        <li>ارجع وكمّل التثبيت عادي</li>
+      </ol>
+    </div>
+  </div>
+</body>
+</html>
