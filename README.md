@@ -415,9 +415,7 @@ npm run dev
 ---
 
 ## اللي لسه ناقص
-
-1. **النشر (Deployment)** — لسه محلي بس، مفيش رفع على استضافة عامة.
-2. ملحوظة توثيق: السبيك الأصلي (`docs/project-spec.md`) بيذكر Tailwind CSS
+1. ملحوظة توثيق: السبيك الأصلي (`docs/project-spec.md`) بيذكر Tailwind CSS
    كجزء من الـ Tech Stack، لكن الشاشات فعليًا بتستخدم inline styles /
    `<style>` tags جوه كل component — مفيش Tailwind متثبت أو متستخدم حاليًا.
    لو حابب تفضل الطريقة دي، يفضل تتحدث الـ Tech Stack في السبيك كذلك.
