@@ -12,6 +12,9 @@ import {
   ListChecks,
   LogOut,
   Loader2,
+  Tag,
+  Pencil,
+  ChevronDown,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 
@@ -44,11 +47,22 @@ export default function CustomerScreen({ profile, onLogout }) {
     description: "",
     location: "",
     phone: profile?.phone || "",
+    price: "",
   });
   const [submitting, setSubmitting] = useState(false);
   const [banner, setBanner] = useState(null);
   const [locations, setLocations] = useState([]);
   const [locationsLoading, setLocationsLoading] = useState(true);
+  const [minPrice, setMinPrice] = useState(null);
+
+  // عروض الدليفريين المعلّقة على أوردرات العميل ده — key = order_id, value = مصفوفة عروض
+  const [offersByOrder, setOffersByOrder] = useState({});
+  const [acceptingOfferId, setAcceptingOfferId] = useState(null);
+
+  // اقتراح سعر تاني على عرض دليفري معيّن — بدل ما العميل يقبل أو يسيب بس
+  const [counterOpenId, setCounterOpenId] = useState(null); // id العرض اللي فاتح فيه حقل الرد دلوقتي
+  const [counterDraft, setCounterDraft] = useState({}); // key = offer_id, value = نص الحقل
+  const [counteringId, setCounteringId] = useState(null);
 
   const activeCount = orders.filter(
     (o) => o.status !== "delivered" && o.status !== "cancelled"
@@ -59,6 +73,62 @@ export default function CustomerScreen({ profile, onLogout }) {
     const t = setTimeout(() => setBanner(null), 2600);
     return () => clearTimeout(t);
   }, [banner]);
+
+  // تحميل الحد الأدنى لسعر التوصيل من إعدادات الأدمن — بنستخدمه كقيمة
+  // مبدئية لحقل السعر وكـ hint للعميل
+  useEffect(() => {
+    let ignore = false;
+    supabase
+      .from("app_settings")
+      .select("min_delivery_price")
+      .eq("id", 1)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (ignore || error || !data) return;
+        setMinPrice(data.min_delivery_price);
+        setForm((f) => (f.price ? f : { ...f, price: String(data.min_delivery_price) }));
+      });
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  // عروض الدليفريين المعلّقة على كل أوردرات العميل (عبر RPC آمن — شوف
+  // customer-offers-rpc.sql — عشان نقدر نعرض اسم/تليفون كل دليفري)
+  const fetchOffers = useCallback(async () => {
+    const { data, error } = await supabase.rpc("get_my_pending_offers");
+    if (error) return;
+    const map = {};
+    (data || []).forEach((row) => {
+      if (!map[row.order_id]) map[row.order_id] = [];
+      map[row.order_id].push(row);
+    });
+    setOffersByOrder(map);
+  }, []);
+
+  useEffect(() => {
+    if (!profile?.id) return;
+    fetchOffers();
+  }, [profile?.id, fetchOffers]);
+
+  // الاستماع اللايف لأي تغيير في عروض الدليفريين على أوردرات العميل ده —
+  // Realtime بيحترم RLS تلقائي فمش هيوصلنا غير صفوف أوردراته هو، وأي
+  // تغيير (عرض جديد / تعديل / قبول / رفض) بنعيد تحميل القايمة كاملة
+  useEffect(() => {
+    if (!profile?.id) return;
+    const channel = supabase
+      .channel(`customer-offers-${profile.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "order_offers" },
+        () => fetchOffers()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [profile?.id, fetchOffers]);
 
   // تحميل الأماكن المتاحة للشغل اللي الأدمن ضايفها (عشان العميل يختار منها)
   useEffect(() => {
@@ -140,7 +210,11 @@ export default function CustomerScreen({ profile, onLogout }) {
   }, [profile?.id]);
 
   const canSubmit =
-    form.area.trim() && form.description.trim() && form.location.trim() && form.phone.trim();
+    form.area.trim() &&
+    form.description.trim() &&
+    form.location.trim() &&
+    form.phone.trim() &&
+    Number(form.price) > 0;
 
   const submitOrder = async (e) => {
     e.preventDefault();
@@ -154,6 +228,7 @@ export default function CustomerScreen({ profile, onLogout }) {
         area: form.area.trim(),
         location: form.location.trim(),
         phone: form.phone.trim(),
+        price: Number(form.price),
         status: "new",
       })
       .select()
@@ -161,12 +236,23 @@ export default function CustomerScreen({ profile, onLogout }) {
     setSubmitting(false);
 
     if (error) {
-      setBanner({ type: "cancel", text: "معرفناش نبعت الأوردر، حاول تاني" });
+      setBanner({
+        type: "cancel",
+        text: error.message?.includes("سعر التوصيل")
+          ? error.message
+          : "معرفناش نبعت الأوردر، حاول تاني",
+      });
       return;
     }
 
     setOrders((prev) => (prev.some((o) => o.id === data.id) ? prev : [data, ...prev]));
-    setForm((f) => ({ area: "", description: "", location: "", phone: f.phone }));
+    setForm((f) => ({
+      area: "",
+      description: "",
+      location: "",
+      phone: f.phone,
+      price: minPrice != null ? String(minPrice) : "",
+    }));
     setBanner({ type: "success", text: "الأوردر اتبعت، هنلاقيك دليفري في أقرب وقت" });
     setTab("orders");
   };
@@ -193,6 +279,69 @@ export default function CustomerScreen({ profile, onLogout }) {
       return;
     }
     setBanner({ type: "cancel", text: "تم إلغاء الأوردر" });
+  };
+
+  // العميل بيقبل عرض سعر معيّن من دليفري (عبر RPC آمن بيقفل الأوردر
+  // ويرفض باقي العروض المعلّقة تلقائي — شوف customer_accept_offer في السكريما)
+  const acceptOffer = async (offer) => {
+    if (acceptingOfferId) return;
+    setAcceptingOfferId(offer.id);
+    const { data, error } = await supabase.rpc("customer_accept_offer", {
+      p_offer_id: offer.id,
+    });
+    setAcceptingOfferId(null);
+
+    if (error || !data) {
+      setBanner({
+        type: "cancel",
+        text: error?.message || "معرفناش نقبل العرض، حاول تاني",
+      });
+      fetchOffers();
+      return;
+    }
+
+    setOrders((prev) => prev.map((o) => (o.id === data.id ? data : o)));
+    setOffersByOrder((prev) => {
+      const next = { ...prev };
+      delete next[data.id];
+      return next;
+    });
+    setBanner({
+      type: "success",
+      text: `تم قبول عرض ${offer.courier_name} بـ ${Number(offer.offered_price).toFixed(0)} ج.م`,
+    });
+  };
+
+  // العميل بيرد على عرض دليفري بسعر تاني (بدل ما يقبله على طول) — يقدر
+  // يستخدمها أكتر من مرة على نفس العرض، والدليفري كمان يقدر يرد تاني،
+  // من غير حد أقصى لعدد المرات لحد ما حد الطرفين يقبل.
+  const counterOffer = async (offer) => {
+    const raw = counterDraft[offer.id];
+    const price = parseFloat(raw);
+    if (!raw || Number.isNaN(price) || price <= 0) {
+      setBanner({ type: "cancel", text: "اكتب سعر صحيح أكبر من صفر" });
+      return;
+    }
+    setCounteringId(offer.id);
+    const { data, error } = await supabase.rpc("customer_counter_offer", {
+      p_offer_id: offer.id,
+      p_price: price,
+    });
+    setCounteringId(null);
+
+    if (error || !data) {
+      setBanner({ type: "cancel", text: error?.message || "معرفناش نبعت ردك، حاول تاني" });
+      return;
+    }
+    setOffersByOrder((prev) => {
+      const list = prev[data.order_id] || [];
+      return {
+        ...prev,
+        [data.order_id]: list.map((o) => (o.id === data.id ? { ...o, ...data } : o)),
+      };
+    });
+    setCounterOpenId(null);
+    setBanner({ type: "success", text: `تم إرسال ردك بـ ${price} جنيه لـ ${offer.courier_name}` });
   };
 
   return (
@@ -310,6 +459,8 @@ export default function CustomerScreen({ profile, onLogout }) {
           display: flex; align-items: center; gap: 6px;
         }
         .form-label svg { color: var(--gold-2); flex-shrink: 0; }
+        .form-label-hint { color: var(--muted-2); font-weight: 600; font-size: 11px; margin-right: 4px; }
+        .field-note { font-size: 11.5px; color: var(--muted-2); margin-top: 6px; line-height: 1.6; }
         .field-textarea, .field-input {
           width: 100%; background: var(--navy-3); border: 1px solid var(--navy-line);
           border-radius: 12px; padding: 12px 14px; color: var(--white);
@@ -356,6 +507,69 @@ export default function CustomerScreen({ profile, onLogout }) {
         .order-meta-row { display: flex; align-items: center; gap: 7px; }
         .order-meta-row svg { flex-shrink: 0; color: var(--gold-2); }
         .order-time { font-size: 11.5px; color: var(--muted-2); margin-top: 10px; display: flex; align-items: center; gap: 5px; }
+        .order-price-row { color: var(--gold-2); font-weight: 700; }
+        .order-price-row svg { color: var(--gold-2); }
+
+        /* -------- offers section -------- */
+        .offers-section {
+          margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--navy-line);
+        }
+        .offers-title {
+          display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 800;
+          color: var(--gold); margin-bottom: 10px;
+        }
+        .offer-row {
+          display: flex; flex-direction: column; gap: 10px;
+          background: var(--navy-3); border: 1px solid var(--navy-line);
+          border-radius: 12px; padding: 10px 12px; margin-bottom: 8px;
+        }
+        .offer-row-info { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        .offer-courier-name {
+          display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 700; color: var(--white);
+        }
+        .offer-courier-name svg { color: var(--gold-2); flex-shrink: 0; }
+        .offer-price { font-size: 15px; font-weight: 900; color: var(--gold); font-family: 'Cairo', sans-serif; }
+        .offer-wait-note {
+          font-size: 11.5px; font-weight: 700; color: var(--muted);
+          background: var(--navy-2); border: 1px solid var(--navy-line);
+          border-radius: 8px; padding: 6px 9px; line-height: 1.6;
+        }
+        .offer-row-actions { display: flex; gap: 8px; }
+        .btn-accept-offer {
+          flex: 1; border: none; border-radius: 10px; padding: 9px 12px;
+          background: linear-gradient(135deg, var(--gold), var(--gold-2)); color: var(--navy);
+          font-family: 'Cairo', sans-serif; font-weight: 800; font-size: 12px;
+          display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer;
+          white-space: nowrap;
+        }
+        .btn-accept-offer:active { transform: scale(0.96); }
+        .btn-accept-offer:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .btn-counter-toggle {
+          flex: 1; border: 1px solid var(--gold-2); background: transparent; color: var(--gold-2);
+          border-radius: 10px; padding: 9px 12px; font-family: 'Cairo', sans-serif;
+          font-weight: 800; font-size: 12px; cursor: pointer;
+          display: flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap;
+        }
+        .btn-counter-toggle:active { transform: scale(0.97); }
+
+        .offer-form {
+          display: flex; gap: 8px; animation: rise 0.25s ease both;
+        }
+        .offer-input {
+          flex: 1; min-width: 0; background: var(--navy); border: 1px solid var(--navy-line);
+          color: var(--white); border-radius: 12px; padding: 11px 12px; font-size: 14px;
+          font-family: 'Cairo', sans-serif; font-weight: 700;
+        }
+        .offer-input:focus { outline: none; border-color: var(--gold-2); }
+        .btn-offer-submit {
+          flex-shrink: 0; border: none; border-radius: 12px; padding: 0 16px;
+          background: var(--gold); color: var(--navy); font-family: 'Cairo', sans-serif;
+          font-weight: 800; font-size: 13px; cursor: pointer;
+          display: flex; align-items: center; justify-content: center; gap: 6px;
+        }
+        .btn-offer-submit:active { transform: scale(0.96); }
+        .btn-offer-submit:disabled { opacity: 0.6; cursor: not-allowed; }
 
         .btn-cancel-order {
           margin-top: 12px; width: 100%; border: 1px solid var(--status-cancel);
@@ -456,6 +670,7 @@ export default function CustomerScreen({ profile, onLogout }) {
                 submitting={submitting}
                 locations={locations}
                 locationsLoading={locationsLoading}
+                minPrice={minPrice}
               />
             )}
 
@@ -474,7 +689,19 @@ export default function CustomerScreen({ profile, onLogout }) {
                   </button>
                 </div>
               ) : (
-                <OrdersList orders={orders} onCancel={cancelOrder} />
+                <OrdersList
+                  orders={orders}
+                  onCancel={cancelOrder}
+                  offersByOrder={offersByOrder}
+                  onAcceptOffer={acceptOffer}
+                  acceptingOfferId={acceptingOfferId}
+                  counterOpenId={counterOpenId}
+                  setCounterOpenId={setCounterOpenId}
+                  counterDraft={counterDraft}
+                  setCounterDraft={setCounterDraft}
+                  onCounterOffer={counterOffer}
+                  counteringId={counteringId}
+                />
               ))}
           </>
         )}
@@ -494,7 +721,16 @@ export default function CustomerScreen({ profile, onLogout }) {
   );
 }
 
-function NewOrderForm({ form, setForm, onSubmit, canSubmit, submitting, locations, locationsLoading }) {
+function NewOrderForm({
+  form,
+  setForm,
+  onSubmit,
+  canSubmit,
+  submitting,
+  locations,
+  locationsLoading,
+  minPrice,
+}) {
   return (
     <form className="form-card" onSubmit={onSubmit}>
       <div className="form-card-title">اطلب دلوقتي</div>
@@ -570,6 +806,28 @@ function NewOrderForm({ form, setForm, onSubmit, canSubmit, submitting, location
         />
       </div>
 
+      <div className="form-group">
+        <div className="form-label">
+          <Tag size={14} /> سعر التوصيل المقترح
+          {minPrice != null && (
+            <span className="form-label-hint">(الحد الأدنى {Number(minPrice).toFixed(0)} ج.م)</span>
+          )}
+        </div>
+        <input
+          className="field-input"
+          type="number"
+          inputMode="decimal"
+          min={minPrice ?? 0}
+          step="0.5"
+          placeholder="اكتب السعر اللي مستعد تدفعه للتوصيل"
+          value={form.price}
+          onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
+        />
+        <div className="field-note">
+          الدليفري يقدر يقبل بالسعر ده على طول، أو يقترحلك سعر تاني وتختار.
+        </div>
+      </div>
+
       <button className="btn-submit" type="submit" disabled={!canSubmit || submitting}>
         {submitting ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
         {submitting ? "بيتبعت..." : "ابعت الأوردر"}
@@ -578,7 +836,19 @@ function NewOrderForm({ form, setForm, onSubmit, canSubmit, submitting, location
   );
 }
 
-function OrdersList({ orders, onCancel }) {
+function OrdersList({
+  orders,
+  onCancel,
+  offersByOrder,
+  onAcceptOffer,
+  acceptingOfferId,
+  counterOpenId,
+  setCounterOpenId,
+  counterDraft,
+  setCounterDraft,
+  onCounterOffer,
+  counteringId,
+}) {
   const sorted = [...orders].sort(
     (a, b) => new Date(b.created_at) - new Date(a.created_at)
   );
@@ -587,6 +857,7 @@ function OrdersList({ orders, onCancel }) {
       {sorted.map((o) => {
         const style = STATUS_STYLE[o.status];
         const cancellable = o.status !== "delivered" && o.status !== "cancelled";
+        const offers = o.status === "new" ? offersByOrder?.[o.id] || [] : [];
         return (
           <div className="order-card" key={o.id}>
             <div className="order-top">
@@ -600,6 +871,12 @@ function OrdersList({ orders, onCancel }) {
               </span>
             </div>
             <div className="order-meta">
+              {o.price != null && (
+                <div className="order-meta-row order-price-row">
+                  <Tag size={15} />
+                  <span>سعر التوصيل: {Number(o.price).toFixed(0)} ج.م</span>
+                </div>
+              )}
               <div className="order-meta-row">
                 <MapPin size={15} />
                 <span>{o.area ? `${o.area} — ${o.location}` : o.location}</span>
@@ -612,6 +889,107 @@ function OrdersList({ orders, onCancel }) {
             <div className="order-time">
               <Clock size={12} /> {timeAgo(o.created_at)}
             </div>
+
+            {offers.length > 0 && (
+              <div className="offers-section">
+                <div className="offers-title">
+                  العروض المقترحة <span className="badge-count">{offers.length}</span>
+                </div>
+                {offers.map((offer) => {
+                  const counterIsOpen = counterOpenId === offer.id;
+                  const draftValue =
+                    counterDraft?.[offer.id] !== undefined
+                      ? counterDraft[offer.id]
+                      : String(offer.offered_price);
+                  const countering = counteringId === offer.id;
+                  const youCountered = offer.last_action_by === "customer";
+                  return (
+                    <div className="offer-row" key={offer.id}>
+                      <div className="offer-row-info">
+                        <div className="offer-courier-name">
+                          <Truck size={14} /> {offer.courier_name || "دليفري"}
+                        </div>
+                        <div className="offer-price">
+                          {Number(offer.offered_price).toFixed(0)} ج.م
+                        </div>
+                      </div>
+
+                      {youCountered && (
+                        <div className="offer-wait-note">
+                          بعتّله ردك، في انتظار رد الدليفري
+                        </div>
+                      )}
+
+                      <div className="offer-row-actions">
+                        <button
+                          className="btn-accept-offer"
+                          disabled={acceptingOfferId === offer.id}
+                          onClick={() => onAcceptOffer(offer)}
+                        >
+                          {acceptingOfferId === offer.id ? (
+                            <Loader2 size={14} className="spin" />
+                          ) : (
+                            <CheckCircle2 size={14} />
+                          )}
+                          اقبل العرض ده
+                        </button>
+
+                        <button
+                          className="btn-counter-toggle"
+                          onClick={() =>
+                            setCounterOpenId(counterIsOpen ? null : offer.id)
+                          }
+                        >
+                          <Pencil size={13} />
+                          اقترح سعر تاني
+                          <ChevronDown
+                            size={13}
+                            style={{
+                              transform: counterIsOpen ? "rotate(180deg)" : "none",
+                              transition: "transform 0.2s ease",
+                            }}
+                          />
+                        </button>
+                      </div>
+
+                      {counterIsOpen && (
+                        <div className="offer-form">
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            min="0"
+                            step="0.5"
+                            className="offer-input"
+                            placeholder="اكتب السعر اللي تقترحه (ج.م)"
+                            value={draftValue}
+                            disabled={countering}
+                            onChange={(e) =>
+                              setCounterDraft((prev) => ({
+                                ...prev,
+                                [offer.id]: e.target.value,
+                              }))
+                            }
+                          />
+                          <button
+                            className="btn-offer-submit"
+                            disabled={countering}
+                            onClick={() => onCounterOffer(offer)}
+                          >
+                            {countering ? (
+                              <Loader2 size={15} className="spin" />
+                            ) : (
+                              <Send size={15} />
+                            )}
+                            ابعت ردك
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             {cancellable && (
               <button className="btn-cancel-order" onClick={() => onCancel(o.id)}>
                 <X size={14} /> إلغاء الأوردر

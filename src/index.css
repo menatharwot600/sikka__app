@@ -25,3 +25,16 @@ body {
   min-height: 100vh;
   background: #0B1526;
 }
+
+/* بيشيل سهمي الزيادة/النقصان من حقول الأرقام (type="number") في كل
+   شاشات التطبيق، لأن الشكل ده مش متسق مع التصميم. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}

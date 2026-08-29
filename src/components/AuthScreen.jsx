@@ -207,6 +207,7 @@ export default function AuthScreen({ onAuthSuccess, onSignupStart, onSignupEnd }
           full_name: fields.fullName.trim(),
           phone: fields.phone.trim(),
           area: fields.area.trim(),
+          email: fields.email.trim(),
           role,
         };
 

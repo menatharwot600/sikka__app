@@ -7,10 +7,14 @@ import {
   CheckCircle2,
   X,
   ChevronLeft,
+  ChevronDown,
   Inbox,
   LogOut,
   Loader2,
   Wallet,
+  Tag,
+  Send,
+  Pencil,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import WalletScreen from "./WalletScreen.jsx";
@@ -42,6 +46,13 @@ export default function CourierScreen({ profile, onLogout }) {
   const [banner, setBanner] = useState(null); // { type: 'success'|'cancel', text }
   const [walletBalance, setWalletBalance] = useState(0);
   const [showWallet, setShowWallet] = useState(false);
+
+  // عروض السعر بتاعة الدليفري ده اللي لسه "معلّقة" — key = order_id
+  const [offers, setOffers] = useState({});
+  const [offerOpenId, setOfferOpenId] = useState(null); // الأوردر اللي فاتح فيه حقل اقتراح السعر دلوقتي
+  const [offerDraft, setOfferDraft] = useState({}); // key = order_id, value = نص الحقل
+  const [offerSubmittingId, setOfferSubmittingId] = useState(null);
+  const [acceptingCounterId, setAcceptingCounterId] = useState(null);
 
   useEffect(() => {
     if (!banner) return;
@@ -85,7 +96,7 @@ export default function CourierScreen({ profile, onLogout }) {
     if (!error) setDeliveredToday(count || 0);
   }, [profile?.id]);
 
-  // رصيد محفظة الدليفري (بيتخصم منه 2 جنيه كل ما ياخد أوردر)
+  // رصيد محفظة الدليفري (بيتخصم منه قيمة العمولة كل ما ياخد أوردر)
   const fetchWalletBalance = useCallback(async () => {
     if (!profile?.id) return;
     const { data, error } = await supabase
@@ -94,6 +105,23 @@ export default function CourierScreen({ profile, onLogout }) {
       .eq("id", profile.id)
       .single();
     if (!error) setWalletBalance(data?.wallet_balance || 0);
+  }, [profile?.id]);
+
+  // عروض الأسعار المعلّقة اللي الدليفري ده بعتها (عشان نعرف يعدّل بدل ما يبعت من الأول)
+  const fetchMyOffers = useCallback(async () => {
+    if (!profile?.id) return;
+    const { data, error } = await supabase
+      .from("order_offers")
+      .select("id, order_id, offered_price, status, last_action_by")
+      .eq("courier_id", profile.id)
+      .eq("status", "pending");
+    if (!error) {
+      const map = {};
+      (data || []).forEach((o) => {
+        map[o.order_id] = o;
+      });
+      setOffers(map);
+    }
   }, [profile?.id]);
 
   // تحميل أول دفعة بيانات
@@ -109,6 +137,7 @@ export default function CourierScreen({ profile, onLogout }) {
       fetchCurrent(),
       fetchDeliveredToday(),
       fetchWalletBalance(),
+      fetchMyOffers(),
     ])
       .catch((err) => {
         // أي استثناء هنا (شبكة/إعدادات Supabase غلط/إلخ) كان بيوقف الكود
@@ -123,7 +152,14 @@ export default function CourierScreen({ profile, onLogout }) {
     return () => {
       ignore = true;
     };
-  }, [profile?.id, fetchAvailable, fetchCurrent, fetchDeliveredToday, fetchWalletBalance]);
+  }, [
+    profile?.id,
+    fetchAvailable,
+    fetchCurrent,
+    fetchDeliveredToday,
+    fetchWalletBalance,
+    fetchMyOffers,
+  ]);
 
   // الاستماع اللايف لأي تغيير في جدول الأوردرات (Realtime بيحترم RLS تلقائي:
   // الدليفري هيستقبل بس الأوردرات الجديدة المتاحة + أوردره هو)
@@ -174,32 +210,144 @@ export default function CourierScreen({ profile, onLogout }) {
     };
   }, [profile?.id]);
 
+  // الاستماع اللايف لعروض السعر بتاعة الدليفري ده (RLS بترجّع بس صفوفه هو):
+  // لو العميل قبل عرض تاني أو الأوردر اتقفل، عرضه يترفض هنا فورًا ونوريه بانر
+  useEffect(() => {
+    if (!profile?.id) return;
+    const channel = supabase
+      .channel(`courier-offers-${profile.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "order_offers",
+          filter: `courier_id=eq.${profile.id}`,
+        },
+        (payload) => {
+          if (payload.eventType === "DELETE") {
+            setOffers((prev) => {
+              const next = { ...prev };
+              delete next[payload.old.order_id];
+              return next;
+            });
+            return;
+          }
+          const row = payload.new;
+          if (!row) return;
+          if (row.status === "pending") {
+            setOffers((prev) => ({ ...prev, [row.order_id]: row }));
+          } else {
+            setOffers((prev) => {
+              const next = { ...prev };
+              delete next[row.order_id];
+              return next;
+            });
+            if (row.status === "rejected") {
+              setBanner({
+                type: "cancel",
+                text: "للأسف عرضك اتلغى — العميل قبل عرض تاني أو الأوردر اتقفل",
+              });
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [profile?.id]);
+
+  // قبول بالسعر الأصلي — أول دليفري يضغط ياخد الأوردر (عبر RPC آمن يمنع التزامن)
   const claimOrder = async (order) => {
     if (current || claimingId) return;
     setClaimingId(order.id);
-    const { data, error } = await supabase
-      .from("orders")
-      .update({ courier_id: profile.id, status: "claimed" })
-      .eq("id", order.id)
-      .eq("status", "new")
-      .is("courier_id", null)
-      .select()
-      .maybeSingle();
+    const { data, error } = await supabase.rpc("courier_accept_order", {
+      p_order_id: order.id,
+    });
     setClaimingId(null);
 
     if (error || !data) {
-      // لو السبب إن رصيد المحفظة مش كافي، وريه رسالة مخصوصة وافتحله المحفظة
+      // لو السبب إن رصيد المحفظة مش كافي، وريه رسالة الخطأ نفسها (فيها قيمة
+      // العمولة الفعلية من إعدادات الأدمن) وافتحله المحفظة
       if (error?.message?.includes("رصيد المحفظة")) {
-        setBanner({ type: "cancel", text: `رصيدك في المحفظة مش كافي — اشحن ${2} جنيه على الأقل` });
+        setBanner({ type: "cancel", text: error.message });
         setShowWallet(true);
         return;
       }
       // غير كده، على الأغلب حد تاني خد الأوردر ده قبلك
-      setBanner({ type: "cancel", text: "الأوردر ده اتاخد بالفعل، جرب واحد تاني" });
+      setBanner({
+        type: "cancel",
+        text: error?.message || "الأوردر ده اتاخد بالفعل، جرب واحد تاني",
+      });
       fetchAvailable();
       return;
     }
     setAvailable((prev) => prev.filter((o) => o.id !== order.id));
+    setOffers((prev) => {
+      const next = { ...prev };
+      delete next[order.id];
+      return next;
+    });
+    setOfferOpenId((prev) => (prev === order.id ? null : prev));
+    setCurrent(data);
+    setTab("current");
+    fetchWalletBalance();
+  };
+
+  // اقتراح سعر جديد / تعديل عرض سابق على أوردر معيّن
+  const submitOffer = async (order) => {
+    const raw = offerDraft[order.id];
+    const price = parseFloat(raw);
+    if (!raw || Number.isNaN(price) || price <= 0) {
+      setBanner({ type: "cancel", text: "اكتب سعر صحيح أكبر من صفر" });
+      return;
+    }
+    setOfferSubmittingId(order.id);
+    const { data, error } = await supabase.rpc("submit_or_update_offer", {
+      p_order_id: order.id,
+      p_price: price,
+    });
+    setOfferSubmittingId(null);
+
+    if (error || !data) {
+      setBanner({ type: "cancel", text: error?.message || "معرفناش نبعت عرضك، حاول تاني" });
+      return;
+    }
+    setOffers((prev) => ({ ...prev, [order.id]: data }));
+    setOfferOpenId(null);
+    setBanner({ type: "success", text: `تم إرسال عرضك بـ ${price} جنيه` });
+  };
+
+  // الدليفري بيقبل السعر اللي العميل رد بيه على عرضه (بدل ما يرد تاني)
+  const acceptCounterOffer = async (order, offer) => {
+    if (current || acceptingCounterId) return;
+    setAcceptingCounterId(offer.id);
+    const { data, error } = await supabase.rpc("courier_accept_offer", {
+      p_offer_id: offer.id,
+    });
+    setAcceptingCounterId(null);
+
+    if (error || !data) {
+      if (error?.message?.includes("رصيد المحفظة")) {
+        setBanner({ type: "cancel", text: error.message });
+        setShowWallet(true);
+        return;
+      }
+      setBanner({
+        type: "cancel",
+        text: error?.message || "معرفناش نقبل السعر ده، حاول تاني",
+      });
+      return;
+    }
+    setAvailable((prev) => prev.filter((o) => o.id !== order.id));
+    setOffers((prev) => {
+      const next = { ...prev };
+      delete next[order.id];
+      return next;
+    });
+    setOfferOpenId((prev) => (prev === order.id ? null : prev));
     setCurrent(data);
     setTab("current");
     fetchWalletBalance();
@@ -393,15 +541,69 @@ export default function CourierScreen({ profile, onLogout }) {
         .order-meta-row { display: flex; align-items: center; gap: 7px; }
         .order-meta-row svg { flex-shrink: 0; color: var(--gold-2); }
 
+        .order-price-row { color: var(--gold-2); font-weight: 700; }
+        .order-price-row svg { color: var(--gold-2); }
+
+        .order-actions { display: flex; gap: 8px; }
         .btn-claim {
-          width: 100%; border: none; border-radius: 12px; padding: 12px;
-          font-family: 'Cairo', sans-serif; font-weight: 800; font-size: 14.5px;
+          flex: 1.3; border: none; border-radius: 12px; padding: 12px 8px;
+          font-family: 'Cairo', sans-serif; font-weight: 800; font-size: 13.5px;
           background: linear-gradient(135deg, var(--gold), var(--gold-2)); color: var(--navy);
-          display: flex; align-items: center; justify-content: center; gap: 8px;
+          display: flex; align-items: center; justify-content: center; gap: 7px;
           cursor: pointer; transition: transform 0.15s ease, box-shadow 0.15s ease;
           box-shadow: 0 8px 20px -8px rgba(242,183,5,0.55);
         }
         .btn-claim:active { transform: scale(0.97); }
+
+        .btn-offer-toggle {
+          flex: 1; border: 1px solid var(--gold-2); background: transparent; color: var(--gold-2);
+          border-radius: 12px; padding: 12px 8px; font-family: 'Cairo', sans-serif;
+          font-weight: 800; font-size: 13px; cursor: pointer;
+          display: flex; align-items: center; justify-content: center; gap: 6px;
+        }
+        .btn-offer-toggle:active { transform: scale(0.97); }
+
+        .my-offer-pill {
+          display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700;
+          color: var(--gold); background: #241D0C; border: 1px solid #4A3B12;
+          border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; line-height: 1.6;
+        }
+
+        .counter-offer-note {
+          display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; font-weight: 700;
+          color: var(--status-claimed); background: var(--status-claimed-bg); border: 1px solid #234a6e;
+          border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; line-height: 1.6;
+        }
+        .btn-accept-counter {
+          margin-right: auto; border: none; border-radius: 8px; padding: 7px 12px;
+          background: linear-gradient(135deg, var(--gold), var(--gold-2)); color: var(--navy);
+          font-family: 'Cairo', sans-serif; font-weight: 800; font-size: 11.5px;
+          display: flex; align-items: center; justify-content: center; gap: 5px; cursor: pointer;
+          white-space: nowrap;
+        }
+        .btn-accept-counter:active { transform: scale(0.96); }
+        .btn-accept-counter:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .offer-form {
+          display: flex; gap: 8px; margin-top: 10px;
+          animation: rise 0.25s ease both;
+        }
+        .offer-input {
+          flex: 1; min-width: 0; background: var(--navy); border: 1px solid var(--navy-line);
+          color: var(--white); border-radius: 12px; padding: 11px 12px; font-size: 14px;
+          font-family: 'Cairo', sans-serif; font-weight: 700;
+        }
+        .offer-input:focus { outline: none; border-color: var(--gold-2); }
+        .btn-offer-submit {
+          flex-shrink: 0; border: none; border-radius: 12px; padding: 0 16px;
+          background: var(--gold); color: var(--navy); font-family: 'Cairo', sans-serif;
+          font-weight: 800; font-size: 13px; cursor: pointer;
+          display: flex; align-items: center; justify-content: center; gap: 6px;
+        }
+        .btn-offer-submit:active { transform: scale(0.96); }
+        .btn-offer-submit:disabled, .btn-claim:disabled, .btn-offer-toggle:disabled {
+          opacity: 0.6; cursor: not-allowed;
+        }
 
         /* -------- empty state -------- */
         .empty-wrap {
@@ -543,6 +745,7 @@ export default function CourierScreen({ profile, onLogout }) {
                   fetchCurrent(),
                   fetchDeliveredToday(),
                   fetchWalletBalance(),
+                  fetchMyOffers(),
                 ])
                   .catch((err) => setLoadError(err?.message || "حصل خطأ غير متوقع"))
                   .finally(() => setLoading(false));
@@ -560,6 +763,15 @@ export default function CourierScreen({ profile, onLogout }) {
                 onClaim={claimOrder}
                 disabled={!!current}
                 claimingId={claimingId}
+                offers={offers}
+                offerOpenId={offerOpenId}
+                setOfferOpenId={setOfferOpenId}
+                offerDraft={offerDraft}
+                setOfferDraft={setOfferDraft}
+                onSubmitOffer={submitOffer}
+                offerSubmittingId={offerSubmittingId}
+                onAcceptCounterOffer={acceptCounterOffer}
+                acceptingCounterId={acceptingCounterId}
               />
             )}
 
@@ -603,7 +815,21 @@ export default function CourierScreen({ profile, onLogout }) {
   );
 }
 
-function AvailableList({ orders, onClaim, disabled, claimingId }) {
+function AvailableList({
+  orders,
+  onClaim,
+  disabled,
+  claimingId,
+  offers,
+  offerOpenId,
+  setOfferOpenId,
+  offerDraft,
+  setOfferDraft,
+  onSubmitOffer,
+  offerSubmittingId,
+  onAcceptCounterOffer,
+  acceptingCounterId,
+}) {
   if (orders.length === 0) {
     return (
       <div className="empty-wrap">
@@ -634,34 +860,128 @@ function AvailableList({ orders, onClaim, disabled, claimingId }) {
           معاك أوردر شغال حالياً — خلّصه الأول عشان تقدر تاخد أوردر جديد.
         </div>
       )}
-      {orders.map((o) => (
-        <div className="order-card" key={o.id}>
-          <div className="order-desc">{o.description}</div>
-          <div className="order-meta">
-            <div className="order-meta-row">
-              <MapPin size={15} />
-              <span>{o.area ? `${o.area} — ${o.location}` : o.location}</span>
+      {orders.map((o) => {
+        const myOffer = offers?.[o.id];
+        const offerIsOpen = offerOpenId === o.id;
+        const draftValue =
+          offerDraft?.[o.id] !== undefined
+            ? offerDraft[o.id]
+            : myOffer
+            ? String(myOffer.offered_price)
+            : "";
+        const submitting = offerSubmittingId === o.id;
+
+        return (
+          <div className="order-card" key={o.id}>
+            <div className="order-desc">{o.description}</div>
+            <div className="order-meta">
+              {o.price != null && (
+                <div className="order-meta-row order-price-row">
+                  <Tag size={15} />
+                  <span>سعر التوصيل المقترح: {Number(o.price).toFixed(0)} ج.م</span>
+                </div>
+              )}
+              <div className="order-meta-row">
+                <MapPin size={15} />
+                <span>{o.area ? `${o.area} — ${o.location}` : o.location}</span>
+              </div>
+              <div className="order-meta-row">
+                <Phone size={15} />
+                <span>{o.phone}</span>
+              </div>
             </div>
-            <div className="order-meta-row">
-              <Phone size={15} />
-              <span>{o.phone}</span>
-            </div>
-          </div>
-          <button
-            className="btn-claim"
-            disabled={disabled || claimingId === o.id}
-            style={disabled ? { opacity: 0.4, cursor: "not-allowed" } : {}}
-            onClick={() => !disabled && onClaim(o)}
-          >
-            {claimingId === o.id ? (
-              <Loader2 size={16} className="spin" />
-            ) : (
-              <Package size={16} />
+
+            {myOffer && !offerIsOpen && myOffer.last_action_by === "customer" && (
+              <div className="counter-offer-note">
+                <Tag size={13} />
+                العميل رد عليك بسعر: {Number(myOffer.offered_price).toFixed(0)} ج.م
+                <button
+                  className="btn-accept-counter"
+                  disabled={disabled || acceptingCounterId === myOffer.id}
+                  onClick={() => !disabled && onAcceptCounterOffer(o, myOffer)}
+                >
+                  {acceptingCounterId === myOffer.id ? (
+                    <Loader2 size={14} className="spin" />
+                  ) : (
+                    <CheckCircle2 size={14} />
+                  )}
+                  اقبل السعر ده
+                </button>
+              </div>
             )}
-            {claimingId === o.id ? "بياخد الأوردر..." : "خد الأوردر"}
-          </button>
-        </div>
-      ))}
+
+            {myOffer && !offerIsOpen && myOffer.last_action_by !== "customer" && (
+              <div className="my-offer-pill">
+                <Tag size={13} />
+                عرضك الحالي: {Number(myOffer.offered_price).toFixed(0)} ج.م — في انتظار رد العميل
+              </div>
+            )}
+
+            <div className="order-actions">
+              <button
+                className="btn-claim"
+                disabled={disabled || claimingId === o.id}
+                style={disabled ? { opacity: 0.4, cursor: "not-allowed" } : {}}
+                onClick={() => !disabled && onClaim(o)}
+              >
+                {claimingId === o.id ? (
+                  <Loader2 size={16} className="spin" />
+                ) : (
+                  <Package size={16} />
+                )}
+                {claimingId === o.id ? "بياخد الأوردر..." : "قبول بالسعر الأصلي"}
+              </button>
+
+              <button
+                className="btn-offer-toggle"
+                disabled={disabled}
+                style={disabled ? { opacity: 0.4, cursor: "not-allowed" } : {}}
+                onClick={() => !disabled && setOfferOpenId(offerIsOpen ? null : o.id)}
+              >
+                {myOffer ? <Pencil size={15} /> : <Tag size={15} />}
+                {myOffer ? "عدّل عرضك" : "اقترح سعر تاني"}
+                <ChevronDown
+                  size={14}
+                  style={{
+                    transform: offerIsOpen ? "rotate(180deg)" : "none",
+                    transition: "transform 0.2s ease",
+                  }}
+                />
+              </button>
+            </div>
+
+            {offerIsOpen && (
+              <div className="offer-form">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.5"
+                  className="offer-input"
+                  placeholder="اكتب السعر اللي تقترحه (ج.م)"
+                  value={draftValue}
+                  disabled={disabled || submitting}
+                  onChange={(e) =>
+                    setOfferDraft((prev) => ({ ...prev, [o.id]: e.target.value }))
+                  }
+                />
+                <button
+                  className="btn-offer-submit"
+                  disabled={disabled || submitting}
+                  onClick={() => onSubmitOffer(o)}
+                >
+                  {submitting ? (
+                    <Loader2 size={15} className="spin" />
+                  ) : (
+                    <Send size={15} />
+                  )}
+                  {myOffer ? "تحديث العرض" : "إرسال العرض"}
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -18,6 +18,8 @@ import {
   RotateCcw,
   Settings2,
   MapPin,
+  Mail,
+  Hash,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 
@@ -349,6 +351,11 @@ export default function UserDetailScreen({ person, onBack, onChanged }) {
               <div className="ud-meta-row">
                 <Phone size={13} /> {person.phone}
               </div>
+              {person.email && (
+                <div className="ud-meta-row" style={{ direction: "ltr", justifyContent: "flex-end" }}>
+                  <Mail size={13} /> {person.email}
+                </div>
+              )}
               {person.area && (
                 <div className="ud-meta-row">
                   <MapPin size={13} /> {person.area}
@@ -356,6 +363,9 @@ export default function UserDetailScreen({ person, onBack, onChanged }) {
               )}
               <div className="ud-meta-row">
                 <Calendar size={13} /> اتسجل {formatDateTime(person.created_at)}
+              </div>
+              <div className="ud-meta-row" style={{ direction: "ltr", justifyContent: "flex-end" }}>
+                <Hash size={13} /> {person.id}
               </div>
               <span className="ud-role-badge" style={{ background: roleMeta.bg, color: roleMeta.color }}>
                 <RoleIcon size={12} /> {roleMeta.label}

@@ -64,7 +64,7 @@ const ACCOUNT_TYPE_META = {
 };
 
 export default function AdminScreen({ profile, onLogout }) {
-  const [tab, setTab] = useState("orders"); // 'orders' | 'users' | 'adminlog' | 'topups' | 'accounts' | 'courier_verifications'
+  const [tab, setTab] = useState("orders"); // 'orders' | 'users' | 'adminlog' | 'topups' | 'accounts' | 'courier_verifications' | 'settings'
   const [orders, setOrders] = useState([]);
   const [profiles, setProfiles] = useState([]);
   const [adminLog, setAdminLog] = useState([]);
@@ -73,6 +73,7 @@ export default function AdminScreen({ profile, onLogout }) {
   const [paymentAccounts, setPaymentAccounts] = useState([]);
   const [workLocations, setWorkLocations] = useState([]);
   const [courierVerifications, setCourierVerifications] = useState([]);
+  const [appSettings, setAppSettings] = useState(null);
   const [selectedUser, setSelectedUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -169,6 +170,16 @@ export default function AdminScreen({ profile, onLogout }) {
     return error;
   }, []);
 
+  const fetchAppSettings = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("app_settings")
+      .select("*")
+      .eq("id", 1)
+      .maybeSingle();
+    if (!error) setAppSettings(data || null);
+    return error;
+  }, []);
+
   useEffect(() => {
     let ignore = false;
     setLoading(true);
@@ -181,6 +192,7 @@ export default function AdminScreen({ profile, onLogout }) {
       fetchWithdrawRequests(),
       fetchWorkLocations(),
       fetchCourierVerifications(),
+      fetchAppSettings(),
     ]).then(() => {
       if (!ignore) setLoading(false);
     });
@@ -196,6 +208,7 @@ export default function AdminScreen({ profile, onLogout }) {
     fetchWithdrawRequests,
     fetchWorkLocations,
     fetchCourierVerifications,
+    fetchAppSettings,
   ]);
 
   // الأدمن بيشوف كل حاجة (RLS مسموحلها) — أي تغيير في الأوردرات أو
@@ -227,6 +240,9 @@ export default function AdminScreen({ profile, onLogout }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "courier_verifications" }, () => {
         fetchCourierVerifications();
       })
+      .on("postgres_changes", { event: "*", schema: "public", table: "app_settings" }, () => {
+        fetchAppSettings();
+      })
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [
@@ -238,6 +254,7 @@ export default function AdminScreen({ profile, onLogout }) {
     fetchWithdrawRequests,
     fetchWorkLocations,
     fetchCourierVerifications,
+    fetchAppSettings,
   ]);
 
   const manualRefresh = async () => {
@@ -251,6 +268,7 @@ export default function AdminScreen({ profile, onLogout }) {
       fetchWithdrawRequests(),
       fetchWorkLocations(),
       fetchCourierVerifications(),
+      fetchAppSettings(),
     ]);
     setRefreshing(false);
   };
@@ -384,6 +402,20 @@ export default function AdminScreen({ profile, onLogout }) {
     }
     setBanner({ type: "ok", text: "اتمسح المكان" });
     fetchWorkLocations();
+  };
+
+  const saveAppSettings = async (minPrice, commission) => {
+    const { data, error } = await supabase.rpc("admin_update_app_settings", {
+      p_min_delivery_price: minPrice,
+      p_commission_amount: commission,
+    });
+    if (error) {
+      setBanner({ type: "error", text: error.message || "معرفناش نحفظ الإعدادات" });
+      return false;
+    }
+    setAppSettings(data);
+    setBanner({ type: "ok", text: "اتحفظت الإعدادات" });
+    return true;
   };
 
   const stats = useMemo(() => {
@@ -645,6 +677,7 @@ export default function AdminScreen({ profile, onLogout }) {
         }
         .adm-user-name { font-size: 13.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .adm-user-phone { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+        .adm-user-email { font-size: 11px; color: var(--muted); margin-top: 1px; opacity: 0.8; direction: ltr; text-align: right; }
         .adm-user-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
         .adm-role-badge { font-size: 10.5px; font-weight: 800; padding: 4px 9px; border-radius: 999px; }
         .adm-wallet-tag { font-size: 12px; font-weight: 800; color: var(--gold); white-space: nowrap; }
@@ -773,10 +806,22 @@ export default function AdminScreen({ profile, onLogout }) {
               >
                 <ClipboardList size={15} /> سجل الأدمن
               </button>
+              <button
+                className={`adm-sec-tab ${tab === "settings" ? "on" : ""}`}
+                onClick={() => setTab("settings")}
+              >
+                <Settings2 size={15} /> إعدادات التسعير
+              </button>
             </div>
 
             <div className="adm-body">
-              {tab !== "adminlog" && tab !== "topups" && tab !== "withdraws" && tab !== "accounts" && tab !== "locations" && tab !== "courier_verifications" && (
+              {tab !== "adminlog" &&
+                tab !== "topups" &&
+                tab !== "withdraws" &&
+                tab !== "accounts" &&
+                tab !== "locations" &&
+                tab !== "courier_verifications" &&
+                tab !== "settings" && (
                 <div className="adm-search">
                   <Search size={15} />
                   <input
@@ -894,6 +939,8 @@ export default function AdminScreen({ profile, onLogout }) {
                   onToggle={toggleWorkLocationActive}
                   onDelete={deleteWorkLocation}
                 />
+              ) : tab === "settings" ? (
+                <SettingsPanel settings={appSettings} onSave={saveAppSettings} />
               ) : (
                 <>
                   {adminLog.length === 0 ? (
@@ -1008,6 +1055,7 @@ function UserRow({ person, onOpen }) {
             {person.phone}
             {person.area ? ` · ${person.area}` : ""}
           </div>
+          {person.email && <div className="adm-user-email">{person.email}</div>}
         </div>
       </div>
       <div className="adm-user-right">
@@ -1576,6 +1624,115 @@ function LocationsPanel({ locations, onAdd, onToggle, onDelete }) {
           </div>
         ))
       )}
+    </div>
+  );
+}
+
+function SettingsPanel({ settings, onSave }) {
+  const [minPrice, setMinPrice] = useState("");
+  const [commission, setCommission] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (!settings || dirty) return;
+    setMinPrice(String(settings.min_delivery_price ?? ""));
+    setCommission(String(settings.commission_amount ?? ""));
+  }, [settings, dirty]);
+
+  const minPriceNum = Number(minPrice);
+  const commissionNum = Number(commission);
+  const valid =
+    minPrice !== "" &&
+    commission !== "" &&
+    Number.isFinite(minPriceNum) &&
+    Number.isFinite(commissionNum) &&
+    minPriceNum >= 0 &&
+    commissionNum >= 0;
+
+  const submit = async () => {
+    if (!valid) return;
+    setBusy(true);
+    const ok = await onSave(minPriceNum, commissionNum);
+    setBusy(false);
+    if (ok) setDirty(false);
+  };
+
+  if (!settings) {
+    return <div className="adm-empty">بنحمّل الإعدادات...</div>;
+  }
+
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: 12.5,
+          color: "#93A0B8",
+          background: "#101E33",
+          border: "1px solid #22344F",
+          borderRadius: 12,
+          padding: "10px 12px",
+          marginBottom: 14,
+          fontWeight: 600,
+          lineHeight: 1.7,
+        }}
+      >
+        الحد الأدنى بيتفرض على العميل وقت ما يعمل أوردر جديد. العمولة قيمة
+        ثابتة (مش نسبة) بتتخصم من محفظة الدليفري لحظة ما ياخد الأوردر —
+        بالسعر الأصلي أو بأي عرض.
+      </div>
+
+      <div className="adm-account-form" style={{ marginBottom: 0 }}>
+        <label style={{ fontSize: 12.5, color: "#93A0B8", fontWeight: 700 }}>
+          الحد الأدنى لسعر التوصيل (ج.م)
+        </label>
+        <input
+          className="adm-form-input"
+          type="number"
+          min="0"
+          step="0.5"
+          placeholder="مثلاً: 10"
+          value={minPrice}
+          onChange={(e) => {
+            setMinPrice(e.target.value);
+            setDirty(true);
+          }}
+        />
+
+        <label style={{ fontSize: 12.5, color: "#93A0B8", fontWeight: 700, marginTop: 6 }}>
+          قيمة العمولة الثابتة (ج.م)
+        </label>
+        <input
+          className="adm-form-input"
+          type="number"
+          min="0"
+          step="0.5"
+          placeholder="مثلاً: 2"
+          value={commission}
+          onChange={(e) => {
+            setCommission(e.target.value);
+            setDirty(true);
+          }}
+        />
+
+        <div className="adm-form-actions" style={{ marginTop: 4 }}>
+          <button className="adm-btn-mini ok" onClick={submit} disabled={busy || !valid || !dirty}>
+            {busy ? <Loader2 size={13} className="adm-spin" /> : <Check size={13} />} حفظ
+          </button>
+          {dirty && !busy && (
+            <button
+              className="adm-btn-mini"
+              onClick={() => {
+                setMinPrice(String(settings.min_delivery_price ?? ""));
+                setCommission(String(settings.commission_amount ?? ""));
+                setDirty(false);
+              }}
+            >
+              إلغاء التعديل
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

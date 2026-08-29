@@ -20,7 +20,8 @@ import { supabase } from "../lib/supabaseClient";
 import { pickImage } from "../lib/pickImage";
 import { VodafoneCashLogo, InstaPayLogo } from "./PaymentLogos.jsx";
 
-const ORDER_FEE = 2;
+// قيمة افتراضية بس لحد ما نجيب القيمة الحقيقية من app_settings (نفس default الداتابيز)
+const DEFAULT_ORDER_FEE = 2;
 
 // وسائل السحب (السحب لسه بيتم بنفس الفكرة القديمة برقم الموبايل)
 const PAYMENT_METHODS = [
@@ -58,6 +59,7 @@ const TX_META = {
 
 export default function WalletScreen({ profile, onBack, onBalanceChange }) {
   const [balance, setBalance] = useState(0);
+  const [orderFee, setOrderFee] = useState(DEFAULT_ORDER_FEE);
   const [txs, setTxs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState(null); // null | 'topup' | 'withdraw'
@@ -84,7 +86,7 @@ export default function WalletScreen({ profile, onBack, onBalanceChange }) {
 
   const fetchAll = useCallback(async () => {
     if (!profile?.id) return;
-    const [{ data: p }, { data: t }, { data: reqs }] = await Promise.all([
+    const [{ data: p }, { data: t }, { data: reqs }, { data: settings }] = await Promise.all([
       supabase.from("profiles").select("wallet_balance").eq("id", profile.id).single(),
       supabase
         .from("wallet_transactions")
@@ -99,10 +101,14 @@ export default function WalletScreen({ profile, onBack, onBalanceChange }) {
         .neq("status", "approved")
         .order("created_at", { ascending: false })
         .limit(15),
+      supabase.from("app_settings").select("commission_amount").eq("id", 1).maybeSingle(),
     ]);
     if (p) {
       setBalance(p.wallet_balance || 0);
       onBalanceChange && onBalanceChange(p.wallet_balance || 0);
+    }
+    if (settings?.commission_amount != null) {
+      setOrderFee(Number(settings.commission_amount));
     }
     const reqRows = (reqs || []).map((r) => ({
       id: `req-${r.id}`,
@@ -121,6 +127,18 @@ export default function WalletScreen({ profile, onBack, onBalanceChange }) {
     setLoading(true);
     fetchAll().then(() => setLoading(false));
   }, [fetchAll]);
+
+  // لو الأدمن غيّر قيمة العمولة والشاشة فاتحة، تتحدّث لايف من غير ما نحتاج refresh يدوي
+  useEffect(() => {
+    const channel = supabase
+      .channel("wallet-app-settings")
+      .on("postgres_changes", { event: "*", schema: "public", table: "app_settings" }, (payload) => {
+        const fee = payload?.new?.commission_amount;
+        if (fee != null) setOrderFee(Number(fee));
+      })
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, []);
 
   const fetchAccounts = useCallback(async () => {
     setAccountsLoading(true);
@@ -262,7 +280,7 @@ export default function WalletScreen({ profile, onBack, onBalanceChange }) {
     fetchAll();
   };
 
-  const quickAmounts = mode === "topup" ? [20, 50, 100, 200] : [ORDER_FEE * 5, 20, 50, 100];
+  const quickAmounts = mode === "topup" ? [20, 50, 100, 200] : [orderFee * 5, 20, 50, 100];
 
   return (
     <div className="wallet-root" dir="rtl">
@@ -481,7 +499,7 @@ export default function WalletScreen({ profile, onBack, onBalanceChange }) {
                 {formatEGP(balance)} <span>جنيه</span>
               </div>
               <div className="balance-note">
-                كل أوردر بتاخده بيتخصم منه <b>{ORDER_FEE} جنيه</b> رسوم استخدام تلقائي من المحفظة.
+                كل أوردر بتاخده بيتخصم منه <b>{orderFee} جنيه</b> رسوم استخدام تلقائي من المحفظة.
               </div>
             </div>
 
@@ -498,7 +516,7 @@ export default function WalletScreen({ profile, onBack, onBalanceChange }) {
 
             <div className="fee-note">
               <Truck size={16} color="#F2B705" />
-              لازم يكون معاك على الأقل <b>{ORDER_FEE} جنيه</b> في المحفظة عشان تقدر تاخد أوردر جديد.
+              لازم يكون معاك على الأقل <b>{orderFee} جنيه</b> في المحفظة عشان تقدر تاخد أوردر جديد.
             </div>
 
             <div className="section-title">آخر الحركات</div>

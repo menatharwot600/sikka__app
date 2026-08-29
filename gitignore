@@ -1,0 +1,36 @@
+# dependencies
+node_modules/
+
+# environment variables (بيها مفاتيح Supabase الحقيقية — ميتترفعش أبداً)
+.env
+.env.local
+.env.*.local
+
+# build output
+dist/
+dist-ssr/
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.local
+
+# vite cache
+.vite/
+
+# Capacitor / Android — الـ Keystore وبياناته لازم يفضلوا سرّيين تمامًا
+# (لو اتسربوا، أي حد يقدر يوقّع تحديثات مزيفة باسم التطبيق)
+android/keystore.properties
+*.keystore
+*.jks
+android/app/build/
+android/build/
+android/.gradle/
